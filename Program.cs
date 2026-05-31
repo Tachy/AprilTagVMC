@@ -121,6 +121,10 @@ class Program
         using var distCoeffs = new Mat();
 
         // --- VMC-SENDEMODUS ---
+        const float smoothAlpha = 0.35f; // 0 = max. Glättung (viel Lag), 1 = kein Smoothing
+        var smoothPos = new Dictionary<int, (float x, float y, float z)>();
+        var smoothRot = new Dictionary<int, Quaternion>();
+
         timeBeginPeriod(1); // Windows-Timer auf 1ms Auflösung für präzises Sleep
         var timer = new System.Diagnostics.Stopwatch();
         var uptime = System.Diagnostics.Stopwatch.StartNew();
@@ -203,8 +207,24 @@ class Program
                     float oqx = qx, oqy = -qy, oqz = qz, oqw = -qw;
                     if (oqw < 0) { oqx = -oqx; oqy = -oqy; oqz = -oqz; oqw = -oqw; }
 
+                    // EMA-Smoothing
+                    int id = ids[i];
+                    if (!smoothPos.TryGetValue(id, out var sp))
+                    {
+                        sp = (tx, -ty, tz);
+                        smoothRot[id] = new Quaternion(oqx, oqy, oqz, oqw);
+                    }
+                    var (sx, sy, sz) = sp;
+                    sx = smoothAlpha * tx  + (1 - smoothAlpha) * sx;
+                    sy = smoothAlpha * -ty + (1 - smoothAlpha) * sy;
+                    sz = smoothAlpha * tz  + (1 - smoothAlpha) * sz;
+                    smoothPos[id] = (sx, sy, sz);
+
+                    var sq = Quaternion.Slerp(smoothRot[id], new Quaternion(oqx, oqy, oqz, oqw), smoothAlpha);
+                    smoothRot[id] = sq;
+
                     oscClient.Send(new OscMessage("/VMC/Ext/T", (float)uptime.Elapsed.TotalSeconds));
-                    oscClient.Send(new OscMessage("/VMC/Ext/Tra/Pos", $"AprilTag_{ids[i]}", tx, -ty, tz, oqx, oqy, oqz, oqw));
+                    oscClient.Send(new OscMessage("/VMC/Ext/Tra/Pos", $"AprilTag_{ids[i]}", sx, sy, sz, sq.X, sq.Y, sq.Z, sq.W));
 
                     if (showCoords)
                         Console.Write($"\rTag {ids[i]:D2} | x={tx:F3}  y={ty:F3}  z={tz:F3}  rx={rvec.Item0:F3}  ry={rvec.Item1:F3}  rz={rvec.Item2:F3}  {fps:F1} fps   ");
