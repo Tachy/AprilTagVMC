@@ -1,25 +1,74 @@
-using System;
-using System.Linq;
+using System.Diagnostics;
+using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading;
 using OpenCvSharp;
 using OpenCvSharp.Aruco;
 using Vizcon.OSC;
+
+class AppConfig
+{
+    public string OscTargetIp { get; set; } = "127.0.0.1";
+    public int OscPort { get; set; } = 39539;
+    public double TagSizeMeters { get; set; } = 0.05;
+    public float SmoothAlpha { get; set; } = 0.35f;
+    public int CameraIndex { get; set; } = 0;
+    public int CameraWidth { get; set; } = 640;
+    public int CameraHeight { get; set; } = 480;
+    public int CameraFps { get; set; } = 30;
+}
 
 class Program
 {
     [DllImport("winmm.dll")] static extern int timeBeginPeriod(int uPeriod);
     [DllImport("winmm.dll")] static extern int timeEndPeriod(int uPeriod);
 
+    static AppConfig LoadConfig(string path)
+    {
+        var cfg = new AppConfig();
+        if (!File.Exists(path))
+        {
+            Console.WriteLine($"WARNUNG: '{path}' nicht gefunden — Standardwerte werden verwendet.");
+            return cfg;
+        }
+        foreach (var raw in File.ReadLines(path))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith('#') || !line.Contains('=')) continue;
+            var sep = line.IndexOf('=');
+            var key = line[..sep].Trim();
+            var val = line[(sep + 1)..].Trim();
+            var comment = val.IndexOf('#');
+            if (comment >= 0) val = val[..comment].Trim();
+
+            switch (key)
+            {
+                case "OscTargetIp": cfg.OscTargetIp = val; break;
+                case "OscPort": cfg.OscPort = int.Parse(val); break;
+                case "TagSizeMeters": cfg.TagSizeMeters = double.Parse(val, CultureInfo.InvariantCulture); break;
+                case "SmoothAlpha": cfg.SmoothAlpha = float.Parse(val, CultureInfo.InvariantCulture); break;
+                case "CameraIndex": cfg.CameraIndex = int.Parse(val); break;
+                case "CameraWidth": cfg.CameraWidth = int.Parse(val); break;
+                case "CameraHeight": cfg.CameraHeight = int.Parse(val); break;
+                case "CameraFps": cfg.CameraFps = int.Parse(val); break;
+            }
+        }
+        return cfg;
+    }
+
     static void Main()
     {
-        double tagSize = 0.05; // Größe des Tags in Metern (50mm)
-        var oscClient = new UDPSender("192.168.179.17", 39539);
+        var cfg = LoadConfig("config.ini");
+        Console.WriteLine($"OSC → {cfg.OscTargetIp}:{cfg.OscPort}  Tag {cfg.TagSizeMeters * 100:F0}mm  Kamera {cfg.CameraWidth}x{cfg.CameraHeight}@{cfg.CameraFps}fps  α={cfg.SmoothAlpha}");
 
-        using var capture = new VideoCapture(0);
-        capture.Set(VideoCaptureProperties.FrameWidth, 640);
-        capture.Set(VideoCaptureProperties.FrameHeight, 480);
-        capture.Set(VideoCaptureProperties.Fps, 30);
+        var oscClient = new UDPSender(cfg.OscTargetIp, cfg.OscPort);
+
+        using var capture = new VideoCapture(cfg.CameraIndex);
+        capture.Set(VideoCaptureProperties.FrameWidth, cfg.CameraWidth);
+        capture.Set(VideoCaptureProperties.FrameHeight, cfg.CameraHeight);
+        capture.Set(VideoCaptureProperties.Fps, cfg.CameraFps);
         capture.Set(VideoCaptureProperties.AutoExposure, 0.75);
 
         using var dictionary = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.DictAprilTag_36h11);
@@ -28,18 +77,18 @@ class Program
             AdaptiveThreshWinSizeMin = 3,
             AdaptiveThreshWinSizeMax = 23,
             AdaptiveThreshWinSizeStep = 10,
-            PolygonalApproxAccuracyRate = 0.08, // Default 0.05 → toleranter bei unscharfen Kanten
+            PolygonalApproxAccuracyRate = 0.08,
         };
 
         using var frame = new Mat();
         using var gray = new Mat();
 
         const string calibFile = "calibration.json";
-        double cx = 320.0;
-        double cy = 240.0;
 
         int camW = (int)capture.Get(VideoCaptureProperties.FrameWidth);
         int camH = (int)capture.Get(VideoCaptureProperties.FrameHeight);
+        double cx = camW / 2.0;
+        double cy = camH / 2.0;
 
         double RunCalibration()
         {
@@ -60,7 +109,6 @@ class Program
                 Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
                 CvAruco.DetectMarkers(gray, dictionary, out Point2f[][] corners, out int[] ids, detectorParameters, out _);
 
-                // Zentrierungskreuz
                 int crossX = frame.Width / 2;
                 int crossY = frame.Height / 2;
                 Cv2.Line(frame, new Point(crossX, 0), new Point(crossX, frame.Height), Scalar.White, 1, LineTypes.AntiAlias);
@@ -73,12 +121,12 @@ class Program
                 Cv2.ImShow("Kalibrierung", frame);
 
                 int key = Cv2.WaitKey(1);
-                if (key == 13 && ids != null && ids.Length > 0) // 13 = ENTER
+                if (key == 13 && ids != null && ids.Length > 0)
                 {
                     double pWidth = Math.Sqrt(Math.Pow(corners[0][1].X - corners[0][0].X, 2) +
                                               Math.Pow(corners[0][1].Y - corners[0][0].Y, 2));
 
-                    calculatedFocalLengths[currentStep] = (pWidth * targetDistances[currentStep]) / tagSize;
+                    calculatedFocalLengths[currentStep] = (pWidth * targetDistances[currentStep]) / cfg.TagSizeMeters;
                     Console.WriteLine($"Messung bei {targetDistances[currentStep]}m erfolgreich. f = {calculatedFocalLengths[currentStep]:F2}");
                     currentStep++;
                 }
@@ -86,7 +134,7 @@ class Program
 
             double f = calculatedFocalLengths.Average();
 
-            string saveJson = System.Text.Json.JsonSerializer.Serialize(new { fFinal = f, cx, cy });
+            string saveJson = JsonSerializer.Serialize(new { fFinal = f, cx, cy });
             File.WriteAllText(calibFile, saveJson);
 
             Console.WriteLine($"\nKalibrierung beendet! Brennweite f = {f:F2}");
@@ -103,7 +151,7 @@ class Program
         if (File.Exists(calibFile))
         {
             string json = File.ReadAllText(calibFile);
-            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var doc = JsonDocument.Parse(json);
             fFinal = doc.RootElement.GetProperty("fFinal").GetDouble();
             Console.WriteLine($"Kalibrierung geladen aus '{calibFile}': f = {fFinal:F2}");
             Console.WriteLine("VMC-Sendemodus. Beenden: ESC  |  Neu-Kalibrierung: C  |  Koordinaten: K\n");
@@ -121,13 +169,13 @@ class Program
         using var distCoeffs = new Mat();
 
         // --- VMC-SENDEMODUS ---
-        const float smoothAlpha = 0.35f; // 0 = max. Glättung (viel Lag), 1 = kein Smoothing
         var smoothPos = new Dictionary<int, (float x, float y, float z)>();
         var smoothRot = new Dictionary<int, Quaternion>();
 
-        timeBeginPeriod(1); // Windows-Timer auf 1ms Auflösung für präzises Sleep
-        var timer = new System.Diagnostics.Stopwatch();
-        var uptime = System.Diagnostics.Stopwatch.StartNew();
+        timeBeginPeriod(1);
+        var timer = new Stopwatch();
+        var uptime = Stopwatch.StartNew();
+        int frameMs = 1000 / cfg.CameraFps;
         double fps = 0;
         bool showCoords = false;
 
@@ -146,7 +194,7 @@ class Program
 
             if (ids != null && ids.Length > 0)
             {
-                CvAruco.EstimatePoseSingleMarkers(corners, (float)tagSize, cameraMatrix, distCoeffs, rvecs, tvecs);
+                CvAruco.EstimatePoseSingleMarkers(corners, (float)cfg.TagSizeMeters, cameraMatrix, distCoeffs, rvecs, tvecs);
 
                 for (int i = 0; i < ids.Length; i++)
                 {
@@ -207,7 +255,6 @@ class Program
                     float oqx = qx, oqy = -qy, oqz = qz, oqw = -qw;
                     if (oqw < 0) { oqx = -oqx; oqy = -oqy; oqz = -oqz; oqw = -oqw; }
 
-                    // EMA-Smoothing
                     int id = ids[i];
                     if (!smoothPos.TryGetValue(id, out var sp))
                     {
@@ -215,12 +262,12 @@ class Program
                         smoothRot[id] = new Quaternion(oqx, oqy, oqz, oqw);
                     }
                     var (sx, sy, sz) = sp;
-                    sx = smoothAlpha * tx  + (1 - smoothAlpha) * sx;
-                    sy = smoothAlpha * -ty + (1 - smoothAlpha) * sy;
-                    sz = smoothAlpha * tz  + (1 - smoothAlpha) * sz;
+                    sx = cfg.SmoothAlpha * tx + (1 - cfg.SmoothAlpha) * sx;
+                    sy = cfg.SmoothAlpha * -ty + (1 - cfg.SmoothAlpha) * sy;
+                    sz = cfg.SmoothAlpha * tz + (1 - cfg.SmoothAlpha) * sz;
                     smoothPos[id] = (sx, sy, sz);
 
-                    var sq = Quaternion.Slerp(smoothRot[id], new Quaternion(oqx, oqy, oqz, oqw), smoothAlpha);
+                    var sq = Quaternion.Slerp(smoothRot[id], new Quaternion(oqx, oqy, oqz, oqw), cfg.SmoothAlpha);
                     smoothRot[id] = sq;
 
                     oscClient.Send(new OscMessage("/VMC/Ext/T", (float)uptime.Elapsed.TotalSeconds));
@@ -248,10 +295,9 @@ class Program
                 }
             }
 
-            int sleepTime = 33 - (int)timer.ElapsedMilliseconds; // ~30 fps cap
-            if (sleepTime > 0) System.Threading.Thread.Sleep(sleepTime);
+            int sleepTime = frameMs - (int)timer.ElapsedMilliseconds;
+            if (sleepTime > 0) Thread.Sleep(sleepTime);
 
-            // FPS aus der vollständigen Frame-Dauer (inkl. Sleep) für die nächste Anzeige
             if (timer.ElapsedMilliseconds > 0)
                 fps = 1000.0 / timer.ElapsedMilliseconds;
         }
