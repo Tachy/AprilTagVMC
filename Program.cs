@@ -14,21 +14,20 @@ class Program
     static void Main()
     {
         double tagSize = 0.05; // Größe des Tags in Metern (50mm)
-        var oscClient = new UDPSender("127.0.0.1", 39539);
+        var oscClient = new UDPSender("192.168.179.17", 39539);
 
         using var capture = new VideoCapture(0);
         capture.Set(VideoCaptureProperties.FrameWidth, 640);
         capture.Set(VideoCaptureProperties.FrameHeight, 480);
         capture.Set(VideoCaptureProperties.Fps, 30);
-        capture.Set(VideoCaptureProperties.AutoExposure, 0.25); // manuell (0.25 = off bei vielen Webcams)
-        capture.Set(VideoCaptureProperties.Exposure, -6);       // kürzere Belichtung → weniger Motion Blur
+        capture.Set(VideoCaptureProperties.AutoExposure, 0.75);
 
         using var dictionary = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.DictAprilTag_36h11);
         var detectorParameters = new DetectorParameters()
         {
-            AdaptiveThreshWinSizeMin    = 3,
-            AdaptiveThreshWinSizeMax    = 23,
-            AdaptiveThreshWinSizeStep   = 10,
+            AdaptiveThreshWinSizeMin = 3,
+            AdaptiveThreshWinSizeMax = 23,
+            AdaptiveThreshWinSizeStep = 10,
             PolygonalApproxAccuracyRate = 0.08, // Default 0.05 → toleranter bei unscharfen Kanten
         };
 
@@ -115,15 +114,16 @@ class Program
         }
 
         using var cameraMatrix = new Mat(3, 3, MatType.CV_64FC1);
-        cameraMatrix.Set<double>(0, 0, fFinal); cameraMatrix.Set<double>(0, 1, 0);      cameraMatrix.Set<double>(0, 2, cx);
-        cameraMatrix.Set<double>(1, 0, 0);      cameraMatrix.Set<double>(1, 1, fFinal); cameraMatrix.Set<double>(1, 2, cy);
-        cameraMatrix.Set<double>(2, 0, 0);      cameraMatrix.Set<double>(2, 1, 0);      cameraMatrix.Set<double>(2, 2, 1);
+        cameraMatrix.Set<double>(0, 0, fFinal); cameraMatrix.Set<double>(0, 1, 0); cameraMatrix.Set<double>(0, 2, cx);
+        cameraMatrix.Set<double>(1, 0, 0); cameraMatrix.Set<double>(1, 1, fFinal); cameraMatrix.Set<double>(1, 2, cy);
+        cameraMatrix.Set<double>(2, 0, 0); cameraMatrix.Set<double>(2, 1, 0); cameraMatrix.Set<double>(2, 2, 1);
 
         using var distCoeffs = new Mat();
 
         // --- VMC-SENDEMODUS ---
         timeBeginPeriod(1); // Windows-Timer auf 1ms Auflösung für präzises Sleep
         var timer = new System.Diagnostics.Stopwatch();
+        var uptime = System.Diagnostics.Stopwatch.StartNew();
         double fps = 0;
         bool showCoords = false;
 
@@ -167,18 +167,24 @@ class Program
 
                     float qx, qy, qz, qw;
                     double tr = r00 + r11 + r22;
-                    if (tr > 0) {
+                    if (tr > 0)
+                    {
                         double s = Math.Sqrt(tr + 1.0) * 2;
                         qw = (float)(0.25 * s);
                         qx = (float)((r21 - r12) / s);
                         qy = (float)((r02 - r20) / s);
                         qz = (float)((r10 - r01) / s);
-                    } else {
+                    }
+                    else
+                    {
                         qw = 1; qx = 0; qy = 0; qz = 0;
                     }
 
-                    var message = new OscMessage("/VMC/Ext/Tra/Pos", $"AprilTag_{ids[i]}", tx, -ty, tz, qx, -qy, qz, -qw);
-                    oscClient.Send(message);
+                    float oqx = qx, oqy = -qy, oqz = qz, oqw = -qw;
+                    if (oqw < 0) { oqx = -oqx; oqy = -oqy; oqz = -oqz; oqw = -oqw; }
+
+                    oscClient.Send(new OscMessage("/VMC/Ext/T", (float)uptime.Elapsed.TotalSeconds));
+                    oscClient.Send(new OscMessage("/VMC/Ext/Tra/Pos", $"AprilTag_{ids[i]}", tx, -ty, tz, oqx, oqy, oqz, oqw));
 
                     if (showCoords)
                         Console.Write($"\rTag {ids[i]:D2} | x={tx:F3}  y={ty:F3}  z={tz:F3}  rx={rvec.Item0:F3}  ry={rvec.Item1:F3}  rz={rvec.Item2:F3}  {fps:F1} fps   ");
