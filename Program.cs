@@ -175,9 +175,29 @@ class Program
                         qy = (float)((r02 - r20) / s);
                         qz = (float)((r10 - r01) / s);
                     }
+                    else if (r00 > r11 && r00 > r22)
+                    {
+                        double s = Math.Sqrt(1.0 + r00 - r11 - r22) * 2;
+                        qw = (float)((r21 - r12) / s);
+                        qx = (float)(0.25 * s);
+                        qy = (float)((r01 + r10) / s);
+                        qz = (float)((r02 + r20) / s);
+                    }
+                    else if (r11 > r22)
+                    {
+                        double s = Math.Sqrt(1.0 + r11 - r00 - r22) * 2;
+                        qw = (float)((r02 - r20) / s);
+                        qx = (float)((r01 + r10) / s);
+                        qy = (float)(0.25 * s);
+                        qz = (float)((r12 + r21) / s);
+                    }
                     else
                     {
-                        qw = 1; qx = 0; qy = 0; qz = 0;
+                        double s = Math.Sqrt(1.0 + r22 - r00 - r11) * 2;
+                        qw = (float)((r10 - r01) / s);
+                        qx = (float)((r02 + r20) / s);
+                        qy = (float)((r12 + r21) / s);
+                        qz = (float)(0.25 * s);
                     }
 
                     float oqx = qx, oqy = -qy, oqz = qz, oqw = -qw;
