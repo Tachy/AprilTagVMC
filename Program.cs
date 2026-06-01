@@ -15,6 +15,7 @@ class AppConfig
     public double TagSizeMeters { get; set; } = 0.05;
     public float SmoothAlpha { get; set; } = 0.35f;
     public int CameraIndex { get; set; } = 0;
+    public string CameraApi { get; set; } = "DSHOW";
     public int CameraWidth { get; set; } = 640;
     public int CameraHeight { get; set; } = 480;
     public int CameraFps { get; set; } = 30;
@@ -50,6 +51,7 @@ class Program
                 case "TagSizeMeters": cfg.TagSizeMeters = double.Parse(val, CultureInfo.InvariantCulture); break;
                 case "SmoothAlpha": cfg.SmoothAlpha = float.Parse(val, CultureInfo.InvariantCulture); break;
                 case "CameraIndex": cfg.CameraIndex = int.Parse(val); break;
+                case "CameraApi": cfg.CameraApi = val; break;
                 case "CameraWidth": cfg.CameraWidth = int.Parse(val); break;
                 case "CameraHeight": cfg.CameraHeight = int.Parse(val); break;
                 case "CameraFps": cfg.CameraFps = int.Parse(val); break;
@@ -58,14 +60,40 @@ class Program
         return cfg;
     }
 
-    static void Main()
+    static VideoCaptureAPIs ParseApi(string s) => s.ToUpperInvariant() switch
+    {
+        "DSHOW" => VideoCaptureAPIs.DSHOW,
+        "MSMF"  => VideoCaptureAPIs.MSMF,
+        _       => VideoCaptureAPIs.ANY,
+    };
+
+    static void Main(string[] args)
     {
         var cfg = LoadConfig("config.ini");
-        Console.WriteLine($"OSC → {cfg.OscTargetIp}:{cfg.OscPort}  Tag {cfg.TagSizeMeters * 100:F0}mm  Kamera {cfg.CameraWidth}x{cfg.CameraHeight}@{cfg.CameraFps}fps  α={cfg.SmoothAlpha}");
+        var api = ParseApi(cfg.CameraApi);
+
+        if (args.Contains("--list-cameras"))
+        {
+            Console.WriteLine($"Verfügbare Kameras (Backend: {cfg.CameraApi}):");
+            for (int i = 0; i < 10; i++)
+            {
+                using var cap = new VideoCapture(i, api);
+                if (!cap.IsOpened()) continue;
+                using var f = new Mat();
+                cap.Read(f);
+                string res = f.Empty()
+                    ? "(kein Bild)"
+                    : $"{(int)cap.Get(VideoCaptureProperties.FrameWidth)}x{(int)cap.Get(VideoCaptureProperties.FrameHeight)}";
+                Console.WriteLine($"  Index {i}: {res}");
+            }
+            return;
+        }
+
+        Console.WriteLine($"OSC → {cfg.OscTargetIp}:{cfg.OscPort}  Tag {cfg.TagSizeMeters * 100:F0}mm  Kamera {cfg.CameraWidth}x{cfg.CameraHeight}@{cfg.CameraFps}fps  α={cfg.SmoothAlpha}  API={cfg.CameraApi}");
 
         var oscClient = new UDPSender(cfg.OscTargetIp, cfg.OscPort);
 
-        using var capture = new VideoCapture(cfg.CameraIndex);
+        using var capture = new VideoCapture(cfg.CameraIndex, api);
         capture.Set(VideoCaptureProperties.FrameWidth, cfg.CameraWidth);
         capture.Set(VideoCaptureProperties.FrameHeight, cfg.CameraHeight);
         capture.Set(VideoCaptureProperties.Fps, cfg.CameraFps);

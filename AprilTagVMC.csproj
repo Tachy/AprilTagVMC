@@ -13,4 +13,8 @@
     <PackageReference Include="Vizcon.OSC" Version="1.0.*" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="config.ini" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
