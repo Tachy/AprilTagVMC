@@ -63,8 +63,8 @@ class Program
     static VideoCaptureAPIs ParseApi(string s) => s.ToUpperInvariant() switch
     {
         "DSHOW" => VideoCaptureAPIs.DSHOW,
-        "MSMF"  => VideoCaptureAPIs.MSMF,
-        _       => VideoCaptureAPIs.ANY,
+        "MSMF" => VideoCaptureAPIs.MSMF,
+        _ => VideoCaptureAPIs.ANY,
     };
 
     static void Main(string[] args)
@@ -120,7 +120,7 @@ class Program
 
         double RunCalibration()
         {
-            double[] targetDistances = { 0.10, 0.50, 1.0 };
+            double[] targetDistances = { 0.20, 0.80, 2.0 };
             double[] calculatedFocalLengths = new double[3];
             int currentStep = 0;
 
